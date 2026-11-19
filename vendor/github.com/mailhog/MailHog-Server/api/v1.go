@@ -39,7 +39,7 @@ func createAPIv1(conf *config.Config, r *pat.Router) *APIv1 {
 	log.Println("Creating API v1 with WebPath: " + conf.WebPath)
 	apiv1 := &APIv1{
 		config:      conf,
-		messageChan: make(chan *data.Message),
+		messageChan: make(chan *data.Message, 64),
 	}
 
 	stream = goose.NewEventStream()
@@ -69,11 +69,13 @@ func createAPIv1(conf *config.Config, r *pat.Router) *APIv1 {
 		for {
 			select {
 			case msg := <-apiv1.messageChan:
+				if !stream.HasReceivers() {
+					continue
+				}
 				log.Println("Got message in APIv1 event stream")
-				bytes, _ := json.MarshalIndent(msg, "", "  ")
-				json := string(bytes)
-				log.Printf("Sending content: %s\n", json)
-				apiv1.broadcast(json)
+				bytes, _ := json.Marshal(msg)
+				log.Printf("Sending %d bytes\n", len(bytes))
+				apiv1.broadcast(bytes)
 			case <-keepaliveTicker:
 				apiv1.keepalive()
 			}
@@ -91,10 +93,9 @@ func (apiv1 *APIv1) defaultOptions(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (apiv1 *APIv1) broadcast(json string) {
+func (apiv1 *APIv1) broadcast(json []byte) {
 	log.Println("[APIv1] BROADCAST /api/v1/events")
-	b := []byte(json)
-	stream.Notify("data", b)
+	stream.Notify("data", json)
 }
 
 // keepalive sends an empty keep alive message.

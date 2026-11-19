@@ -15,8 +15,14 @@ func CreateAPI(conf *config.Config, r gohttp.Handler) {
 		for {
 			select {
 			case msg := <-conf.MessageChan:
-				apiv1.messageChan <- msg
-				apiv2.messageChan <- msg
+				select {
+				case apiv1.messageChan <- msg:
+				default:
+				}
+				select {
+				case apiv2.messageChan <- msg:
+				default:
+				}
 			}
 		}
 	}()

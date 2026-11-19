@@ -27,7 +27,7 @@ func createAPIv2(conf *config.Config, r *pat.Router) *APIv2 {
 	log.Println("Creating API v2 with WebPath: " + conf.WebPath)
 	apiv2 := &APIv2{
 		config:      conf,
-		messageChan: make(chan *data.Message),
+		messageChan: make(chan *data.Message, 64),
 		wsHub:       websockets.NewHub(),
 	}
 

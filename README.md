@@ -86,6 +86,7 @@ See [MailHog libraries](docs/LIBRARIES.md) for a list of MailHog client librarie
 * Multipart MIME support
 * Download individual MIME parts
 * In-memory message storage
+  * Bounded by message count and estimated bytes; oldest messages are evicted first
 * MongoDB and file based storage for message persistence
 * Lightweight and portable
 * No installation required

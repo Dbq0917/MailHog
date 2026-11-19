@@ -10,6 +10,8 @@ You can configure MailHog using command line options or environment variables:
 | MH_API_BIND_ADDR    | -api-bind-addr  | 0.0.0.0:8025    | Interface and port for HTTP API server to bind to
 | MH_UI_BIND_ADDR     | -ui-bind-addr   | 0.0.0.0:8025    | Interface and port for HTTP UI server to bind to
 | MH_MAILDIR_PATH     | -maildir-path   |                 | Maildir path (for maildir storage backend)
+| MH_MAX_MEMORY_BYTES | -max-memory-bytes | 268435456     | Maximum estimated bytes retained by the in-memory backend (0 disables this limit)
+| MH_MAX_MESSAGES     | -max-messages   | 10000           | Maximum number of messages retained by the in-memory backend (0 disables this limit)
 | MH_MONGO_COLLECTION | -mongo-coll     | messages        | MongoDB collection name for message storage
 | MH_MONGO_DB         | -mongo-db       | mailhog         | MongoDB database name for message storage
 | MH_MONGO_URI        | -mongo-uri      | 127.0.0.1:27017 | MongoDB host and port
@@ -18,6 +20,28 @@ You can configure MailHog using command line options or environment variables:
 | MH_OUTGOING_SMTP    | -outgoing-smtp  |                 | JSON file defining outgoing SMTP servers
 | MH_UI_WEB_PATH      | -ui-web-path    |                 | WebPath under which the UI is served (without leading or trailing slashes), e.g. 'mailhog'
 | MH_AUTH_FILE        | -auth-file      |                 | A username:bcryptpw mapping file
+
+### In-memory retention
+
+The default `memory` backend keeps the most recent messages up to both limits.
+When either limit is reached, the oldest messages are discarded first. Message
+list order is the order in which storage accepted them, newest first. Each list
+request is served from a consistent snapshot. In an actively receiving system,
+new messages appear at the front and may shift offset-based pages between
+requests.
+
+The byte limit is an estimate of retained message payload and metadata. It is
+intended to keep the process below a deployment memory limit, not to account for
+every byte used by the Go runtime. For a strict heap limit, also set a container
+or process memory limit and choose conservative values here.
+
+Real-time UI notifications are best-effort. If a UI client cannot keep up, it
+may miss individual notifications, but SMTP ingestion continues and the client
+can recover the retained messages through the paginated API.
+
+The memory backend is not durable: a process restart still clears retained
+messages. Use the `mongodb` or `maildir` backend when messages must survive a
+restart.
 
 #### Note on HTTP bind addresses
 

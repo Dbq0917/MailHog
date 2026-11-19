@@ -102,7 +102,16 @@ func (c *Session) acceptMessage(msg *data.SMTPMessage) (id string, err error) {
 	m := msg.Parse(c.proto.Hostname)
 	c.logf("Storing message %s", m.ID)
 	id, err = c.storage.Store(m)
-	c.messageChan <- m
+	if err != nil {
+		return
+	}
+
+	// UI notifications are best-effort. A slow or disconnected client must
+	// never apply backpressure to the SMTP transaction.
+	select {
+	case c.messageChan <- m:
+	default:
+	}
 	return
 }
 

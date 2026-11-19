@@ -18,29 +18,44 @@ var (
 
 // EventStream represents a collection of receivers
 type EventStream struct {
-	mutex     *sync.Mutex
+	mutex     *sync.RWMutex
 	receivers map[net.Conn]*EventReceiver
 }
 
 // NewEventStream creates a new event stream
 func NewEventStream() *EventStream {
 	return &EventStream{
-		mutex:     new(sync.Mutex),
+		mutex:     new(sync.RWMutex),
 		receivers: make(map[net.Conn]*EventReceiver),
 	}
 }
 
+const receiverQueueSize = 8
+
+type streamEvent struct {
+	size string
+	data string
+}
+
 // EventReceiver represents a hijacked HTTP connection
 type EventReceiver struct {
-	stream *EventStream
-	conn   net.Conn
-	bufrw  *bufio.ReadWriter
+	stream    *EventStream
+	conn      net.Conn
+	bufrw     *bufio.ReadWriter
+	send      chan streamEvent
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+// HasReceivers reports whether any event stream clients are connected.
+func (es *EventStream) HasReceivers() bool {
+	es.mutex.RLock()
+	defer es.mutex.RUnlock()
+	return len(es.receivers) > 0
 }
 
 // Notify sends the event to all event stream receivers
 func (es *EventStream) Notify(event string, bytes []byte) {
-	// TODO reader?
-
 	lines := strings.Split(string(bytes), "\n")
 
 	data := ""
@@ -51,47 +66,72 @@ func (es *EventStream) Notify(event string, bytes []byte) {
 	sz := len(data) + 1
 	size := fmt.Sprintf("%X", sz)
 
+	ev := streamEvent{size: size, data: data}
+
+	es.mutex.RLock()
+	defer es.mutex.RUnlock()
 	for _, er := range es.receivers {
-		go er.send(size, data)
+		// Notifications are best-effort. Dropping an event for a slow client
+		// keeps memory bounded and never applies backpressure to ingestion.
+		select {
+		case er.send <- ev:
+		default:
+		}
 	}
 }
 
-func (er *EventReceiver) send(size, data string) {
-	_, err := er.write([]byte(size + "\r\n"))
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(data, "\n")
-	for _, ln := range lines {
-		_, err = er.write([]byte(ln + "\n"))
-		if err != nil {
+func (er *EventReceiver) run() {
+	for {
+		select {
+		case ev := <-er.send:
+			if err := er.writeEvent(ev); err != nil {
+				er.close()
+				return
+			}
+		case <-er.done:
 			return
 		}
 	}
-	er.write([]byte("\r\n"))
+}
+
+func (er *EventReceiver) writeEvent(ev streamEvent) error {
+	_, err := er.write([]byte(ev.size + "\r\n"))
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(ev.data, "\n")
+	for _, ln := range lines {
+		_, err = er.write([]byte(ln + "\n"))
+		if err != nil {
+			return err
+		}
+	}
+	_, err = er.write([]byte("\r\n"))
+	return err
 }
 
 func (er *EventReceiver) write(bytes []byte) (int, error) {
 	n, err := er.bufrw.Write(bytes)
 
 	if err != nil {
-		er.stream.mutex.Lock()
-		delete(er.stream.receivers, er.conn)
-		er.stream.mutex.Unlock()
-		er.conn.Close()
 		return n, err
 	}
 
 	err = er.bufrw.Flush()
-	if err != nil {
-		er.stream.mutex.Lock()
-		delete(er.stream.receivers, er.conn)
-		er.stream.mutex.Unlock()
-		er.conn.Close()
-	}
-
 	return n, err
+}
+
+func (er *EventReceiver) close() {
+	er.closeOnce.Do(func() {
+		er.stream.mutex.Lock()
+		if er.stream.receivers[er.conn] == er {
+			delete(er.stream.receivers, er.conn)
+		}
+		er.stream.mutex.Unlock()
+		close(er.done)
+		er.conn.Close()
+	})
 }
 
 // AddReceiver hijacks a http.ResponseWriter and attaches it to the event stream
@@ -112,11 +152,18 @@ func (es *EventStream) AddReceiver(w http.ResponseWriter) (*EventReceiver, error
 		return nil, err
 	}
 
-	rec := &EventReceiver{es, hjConn, hjBufrw}
+	rec := &EventReceiver{
+		stream: es,
+		conn:   hjConn,
+		bufrw:  hjBufrw,
+		send:   make(chan streamEvent, receiverQueueSize),
+		done:   make(chan struct{}),
+	}
 
 	es.mutex.Lock()
 	es.receivers[hjConn] = rec
 	es.mutex.Unlock()
+	go rec.run()
 
 	return rec, nil
 }

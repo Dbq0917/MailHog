@@ -15,18 +15,20 @@ import (
 // DefaultConfig is the default config
 func DefaultConfig() *Config {
 	return &Config{
-		SMTPBindAddr: "0.0.0.0:1025",
-		APIBindAddr:  "0.0.0.0:8025",
-		Hostname:     "mailhog.example",
-		MongoURI:     "127.0.0.1:27017",
-		MongoDb:      "mailhog",
-		MongoColl:    "messages",
-		MaildirPath:  "",
-		StorageType:  "memory",
-		CORSOrigin:   "",
-		WebPath:      "",
-		MessageChan:  make(chan *data.Message),
-		OutgoingSMTP: make(map[string]*OutgoingSMTP),
+		SMTPBindAddr:   "0.0.0.0:1025",
+		APIBindAddr:    "0.0.0.0:8025",
+		Hostname:       "mailhog.example",
+		MongoURI:       "127.0.0.1:27017",
+		MongoDb:        "mailhog",
+		MongoColl:      "messages",
+		MaildirPath:    "",
+		StorageType:    "memory",
+		CORSOrigin:     "",
+		WebPath:        "",
+		MaxMessages:    storage.DefaultMaxMessages,
+		MaxMemoryBytes: storage.DefaultMaxMemoryBytes,
+		MessageChan:    make(chan *data.Message, 256),
+		OutgoingSMTP:   make(map[string]*OutgoingSMTP),
 	}
 }
 
@@ -49,6 +51,8 @@ type Config struct {
 	OutgoingSMTPFile string
 	OutgoingSMTP     map[string]*OutgoingSMTP
 	WebPath          string
+	MaxMessages      int
+	MaxMemoryBytes   int64
 }
 
 // OutgoingSMTP is an outgoing SMTP server config
@@ -72,14 +76,14 @@ var Jim = &monkey.Jim{}
 func Configure() *Config {
 	switch cfg.StorageType {
 	case "memory":
-		log.Println("Using in-memory storage")
-		cfg.Storage = storage.CreateInMemory()
+		log.Printf("Using in-memory storage (max %d messages / %d bytes)", cfg.MaxMessages, cfg.MaxMemoryBytes)
+		cfg.Storage = storage.CreateInMemoryWithLimits(cfg.MaxMessages, cfg.MaxMemoryBytes)
 	case "mongodb":
 		log.Println("Using MongoDB message storage")
 		s := storage.CreateMongoDB(cfg.MongoURI, cfg.MongoDb, cfg.MongoColl)
 		if s == nil {
 			log.Println("MongoDB storage unavailable, reverting to in-memory storage")
-			cfg.Storage = storage.CreateInMemory()
+			cfg.Storage = storage.CreateInMemoryWithLimits(cfg.MaxMessages, cfg.MaxMemoryBytes)
 		} else {
 			log.Println("Connected to MongoDB")
 			cfg.Storage = s
@@ -128,5 +132,7 @@ func RegisterFlags() {
 	flag.StringVar(&cfg.MaildirPath, "maildir-path", envconf.FromEnvP("MH_MAILDIR_PATH", "").(string), "Maildir path (if storage type is 'maildir')")
 	flag.BoolVar(&cfg.InviteJim, "invite-jim", envconf.FromEnvP("MH_INVITE_JIM", false).(bool), "Decide whether to invite Jim (beware, he causes trouble)")
 	flag.StringVar(&cfg.OutgoingSMTPFile, "outgoing-smtp", envconf.FromEnvP("MH_OUTGOING_SMTP", "").(string), "JSON file containing outgoing SMTP servers")
+	flag.IntVar(&cfg.MaxMessages, "max-messages", envconf.FromEnvP("MH_MAX_MESSAGES", storage.DefaultMaxMessages).(int), "Maximum number of in-memory messages to retain (0 disables the message count limit)")
+	flag.Int64Var(&cfg.MaxMemoryBytes, "max-memory-bytes", envconf.FromEnvP("MH_MAX_MEMORY_BYTES", storage.DefaultMaxMemoryBytes).(int64), "Maximum estimated bytes of in-memory messages to retain (0 disables the byte limit)")
 	Jim.RegisterFlags()
 }
